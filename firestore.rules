@@ -1,0 +1,130 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 's6710380112@pkru.ac.th' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isModeratorOrAdmin() {
+      return isAdmin() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['moderator', 'admin']
+      );
+    }
+
+    // Admins collection
+    match /admins/{adminId} {
+      allow get, list: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == userId && (
+        isAdmin() ||
+        (
+          incoming().role == 'member' &&
+          incoming().status == 'active' &&
+          incoming().uid == request.auth.uid
+        )
+      );
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (
+          request.auth.uid == userId &&
+          incoming().role == existing().role &&
+          incoming().status == existing().status &&
+          incoming().uid == existing().uid
+        )
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Educational Resources collection
+    match /resources/{resourceId} {
+      allow get: if resource.data.status == 'active' || (
+        isSignedIn() && (resource.data.authorId == request.auth.uid || isModeratorOrAdmin())
+      );
+      allow list: if resource.data.status == 'active' || (
+        isSignedIn() && (resource.data.authorId == request.auth.uid || isModeratorOrAdmin())
+      );
+      allow create: if isSignedIn() &&
+        incoming().authorId == request.auth.uid &&
+        incoming().title is string && incoming().title.size() >= 2 && incoming().title.size() <= 200 &&
+        incoming().description is string && incoming().description.size() <= 10000;
+      allow update: if isSignedIn() && (
+        isModeratorOrAdmin() ||
+        (
+          existing().authorId == request.auth.uid &&
+          incoming().authorId == existing().authorId
+        ) ||
+        (
+          incoming().diff(existing()).affectedKeys().hasOnly(['viewCount', 'favoriteCount'])
+        )
+      );
+      allow delete: if isSignedIn() && (
+        isModeratorOrAdmin() || existing().authorId == request.auth.uid
+      );
+    }
+
+    // Favorites collection
+    match /favorites/{favoriteId} {
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
+      allow update: if false;
+      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    // Content Reports collection
+    match /reports/{reportId} {
+      allow get: if isSignedIn() && (resource.data.reporterId == request.auth.uid || isModeratorOrAdmin());
+      allow list: if isSignedIn() && (resource.data.reporterId == request.auth.uid || isModeratorOrAdmin());
+      allow create: if isSignedIn() && incoming().reporterId == request.auth.uid;
+      allow update: if isModeratorOrAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Moderation Logs collection
+    match /moderationLogs/{logId} {
+      allow get, list: if isModeratorOrAdmin();
+      allow create: if isModeratorOrAdmin();
+      allow update, delete: if false;
+    }
+
+    // Settings collection
+    match /settings/{settingId} {
+      allow get, list: if true;
+      allow write: if isModeratorOrAdmin();
+    }
+  }
+}
